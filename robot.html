@@ -1,0 +1,659 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+	<head>
+  <meta http-equiv="X-UA-Compatible" content="IE=9">
+  <script type="text/javascript">
+    var FRAME_RATE = 40;
+    var intervalTime = 1000/FRAME_RATE;
+    var app = {
+    	showUI: true, // compile time only, not valid at runtime
+    	showGridLines: false, //valid at runtime
+		gridNum: 5,
+		squares: [],
+		robots: [],
+		lastReport: "",
+		init: function(canvasHeight, canvasWidth, gridNum) {
+			var me = this;
+			me.canvasHeight = canvasHeight;
+			me.canvasWidth = canvasWidth;
+			me.gridNum = gridNum; //number of blocks in the grid
+
+			if(me.showUI){
+				me.setupCanvas();
+				//use case calls for origin of sw corner
+				me.ctx.translate(0, me.canvas.height);
+				me.ctx.scale(1, -1);
+			}
+			me.setupCommandInput();
+			
+			//create our grid
+			me.createGrid();
+			
+			if(me.showUI){
+				window.setTimeout(function() {me.drawScreen();}, intervalTime); //canvas redraw  
+			}
+		},
+		/*grid square class*/
+		square: function(col, row, width, height, x, y, c) {
+			this.selected = false;
+			this.hover = false;
+			this.row = row;
+			this.col = col;
+			this.width = width;
+			this.height = height;
+			this.x = x;
+			this.y = y;
+			this.opacity = 1;
+			this.rotation = 0;
+			this.strokeStyle = "black";
+		},
+		/*Robot class*/
+		robot: function(parent, speed, height, width, x, y, selected) {
+			this.speed = speed;
+			this.rotation = 0;
+			this.animateRotation = 0;
+			this.selected = selected;
+			this.scope = parent;
+			this.height = height;
+			this.width = width;
+			this.x = x;
+			this.y = y;
+			this.z = 1;
+			this.lastX = x;
+			this.lastY = y;
+			this.animationQueue = [];
+			this.animateToX = x;
+			this.animateToY = y;
+			this.animating = false;
+			this.turnLeft = function() {
+				if (this.rotation == 270) {
+					this.rotation = 0;
+				} else {
+					this.rotation += 90;
+				}
+				
+				this.animationQueue.push({animateToX: null, animateToY: null, rotation: this.rotation});
+			};
+			this.turnRight = function() {
+				if (this.rotation == 0) {
+					this.rotation = 270;
+				} else {
+					this.rotation -= 90;
+				}
+				this.animationQueue.push({animateToX: null, animateToY: null, rotation: this.rotation});
+			};
+			this.getDirection = function() {
+				var direction = null;
+				switch (this.rotation) {
+					case 0:
+						direction = "NORTH";
+						break;
+					case 90:
+						direction = "WEST";
+						break;
+					case 270:
+						direction = "EAST";
+						break;
+					case 180:
+						direction = "SOUTH";
+						break;
+					default:
+						//do nothing
+				}
+				return direction;
+			};
+			this.setDirection = function(direction) {
+				switch (direction) {
+					case "NORTH":
+						this.rotation = 0;
+						this.animationQueue.push({animateToX: null, animateToY: null, rotation: this.rotation});
+						break;
+					case "WEST":
+						this.rotation = 90;
+						this.animationQueue.push({animateToX: null, animateToY: null, rotation: this.rotation});
+						break;
+					case "EAST":
+						this.rotation = 270;
+						this.animationQueue.push({animateToX: null, animateToY: null, rotation: this.rotation});
+						break;
+					case "SOUTH":
+						this.rotation = 180;
+						this.animationQueue.push({animateToX: null, animateToY: null, rotation: this.rotation});
+						break;
+					default:
+						this.rotation = 0;
+						this.animationQueue.push({animateToX: null, animateToY: null, rotation: this.rotation});
+				}
+			};
+			this.setAnimateTo = function(x,y,r){
+				this.animationQueue.push({animateToX: x, animateToY: y, rotation: r});
+			};
+			this.animate = function(callback) {
+				var moved = true;
+				this.lastX = this.x;
+				this.lastY = this.y;
+
+				if (this.animateToX > this.x) {
+					this.x = this.x + this.speed;
+				}
+				if (this.animateToX < this.x) {
+					this.x = this.x - this.speed;
+				}
+
+				if (this.animateToY > this.y) {
+					this.y = this.y + this.speed;
+				}
+				if (this.animateToY < this.y) {
+					this.y = this.y - this.speed;
+				}
+
+				//has it reached its destination
+				if ((this.lastX == this.x) && (this.lastY == this.y)) {
+					moved = false;
+				}
+
+				if (!moved) {
+					//we reached our destinaction
+					this.x = this.animateToX;
+					this.y = this.animateToY;
+					this.animating = false;
+					//look for any items in the queue
+					//if we find one, we remove it and animate there
+					if(this.animationQueue.length > 0){
+						var next = this.animationQueue.shift();
+						//test for null, 0 is considered nothing
+						if(next.animateToX != null){this.animateToX = next.animateToX;}
+						if(next.animateToY != null){this.animateToY = next.animateToY;}
+						if(next.rotation != null){this.animateRotation = next.rotation;}
+					}
+					
+				} else {
+					this.animating = true;
+				}
+
+				if (callback) {
+					callback();
+				}
+			};
+			this.move = function() {
+				var s = null;
+				var rotation = 0;
+				switch (this.getDirection()) {
+					case "NORTH":
+						//find square above
+						s = app.findSquareByIndex(this.square.col, this.square.row + 1);
+						break;
+					case "WEST":
+						//find square left
+						s = app.findSquareByIndex(this.square.col - 1, this.square.row);
+						break;
+					case "EAST":
+						//find square right
+						s = app.findSquareByIndex(this.square.col + 1, this.square.row);
+						break;
+					case "SOUTH":
+						//find square below
+						s = app.findSquareByIndex(this.square.col, this.square.row - 1); //reversed origin
+						break;
+					default:
+						break;
+				}
+
+				if (s) {
+					this.square = s;
+					this.setAnimateTo(s.x,s.y);		
+				}
+      },
+			this.report = function() {
+          app.printOut(this.square.col + "," + this.square.row + "," + this.getDirection());
+      }
+		},
+		/*Setup the canvas and canvas context*/
+		setupCanvas: function() {
+			var me = this;
+			this.canvas = document.createElement("canvas");
+			this.canvas.className = "myCanvas";
+			this.canvas.height = me.canvasHeight;
+			this.canvas.width = me.canvasWidth;
+			document.getElementById("holder").appendChild(this.canvas);
+			this.ctx = this.canvas.getContext("2d");
+		},
+		setupCommandInput: function() {
+			var me = this;
+			//place command
+			this.inputBox = document.createElement("input");
+			this.inputBox.type = "text";
+			this.inputBox.style.width = me.canvasWidth - 100 + "px";
+			this.inputBox.style.height = "25px";
+			this.inputBox.className = "inputBox";
+			this.inputBox.value = "PLACE 0,0,NORTH";
+			document.getElementById("holder").appendChild(this.inputBox);
+
+			this.executeButton = document.createElement("input");
+			this.executeButton.className = "rbutton";
+			this.executeButton.style.width = "100px";
+			this.executeButton.style.height = "25px";
+			this.executeButton.type = "button";
+			this.executeButton.value = "Execute";
+			this.executeButton.onclick = function() {
+				me.runCommand(me.inputBox.value);
+			}
+			document.getElementById("holder").appendChild(this.executeButton);
+			
+			//command
+			this.information = document.createElement("textarea");
+			this.information.className = "information";
+			this.information.height = 60;
+			this.information.width = me.canvasWidth;
+			this.information.innerHTML = "";
+			document.getElementById("holder").appendChild(this.information);
+		},
+		runCommand: function(args){
+			var me = this;
+			var robot = me.robots[0];
+			if((args.indexOf(",") != -1) && (args.indexOf("PLACE") != -1)){
+				//its a place command
+				command = "PLACE";
+				args = args.substring(args.indexOf(" ")+1, args.length);
+				var coords = args.split(',');
+				if(coords.length == 3){
+					me.placeRobot(parseInt(coords[0]), parseInt(coords[1]), coords[2]);
+				}
+			}
+			else{
+				if (me.robots.length == 0) {return;} //nothing to do
+				switch (args) {
+					case "MOVE":
+						robot.move();
+						break;
+					case "LEFT":
+						robot.turnLeft();
+						break;
+					case "RIGHT":
+						robot.turnRight();
+						break;
+					case "REPORT":
+						robot.report();
+						break;
+					default:
+						break;
+				}
+			}		
+		},
+		placeRobot: function(x,y,f) {
+			var me = this;
+			me.robots = [];//only one robot at a time
+			var square = me.findSquareByIndex(x, y);
+
+			if (!square) {
+				return;
+			} //invalid coordinates
+
+			var r = new me.robot(me, 10, me.canvasHeight / me.gridNum, me.canvasWidth / me.gridNum, square.x, square.y, true);
+			r.setDirection(f);
+			r.square = square;
+			me.robots.push(r);
+		},
+		printOut: function(str) {
+			this.information.value = str;
+			this.lastReport = str;
+		},
+		findSquareByIndex: function(col, row) {
+			for (var i = 0, l = this.squares.length; i < l; i++) {
+				var s = this.squares[i];
+				if ((s.row == row) && (s.col == col)) {
+					return s;
+				}
+			}
+		},
+		createGrid: function() {
+			var me = this;
+			var p = 0; //padding if required
+			var w = me.canvasWidth / me.gridNum;
+			var h = me.canvasHeight / me.gridNum;
+			for (var i = 0, l = me.gridNum; i < l; i++) {
+				for (var j = 0, m = me.gridNum; j < m; j++) {
+					var s = new this.square(i, j, w, h, p + (i * w), p + (j * h));
+					this.squares.push(s);
+				}
+			}
+		},
+		drawScreen: function() {
+			var me = this;
+			me.ctx.clearRect(0, 0, me.canvas.width, me.canvas.height);
+
+			//show grid
+			for (var i = 0, l = this.squares.length; i < l; i++) {
+				var s = this.squares[i];
+				me.ctx.globalAlpha = s.opacity;
+				me.ctx.beginPath();
+				me.ctx.lineWidth = 1;
+				if(me.showGridLines){me.ctx.strokeStyle = "grey";}
+				else{me.ctx.strokeStyle = "white";}
+				me.ctx.fillStyle = "white";
+				me.ctx.fillRect(s.x, s.y, s.width, s.height);
+				me.ctx.strokeRect(s.x, s.y, s.width, s.height);
+				me.ctx.closePath();
+			}
+
+			for (var i = 0, l = me.robots.length; i < l; i++) {
+				var r = me.robots[i];
+				r.animate(function(){});
+				me.ctx.save();
+
+				//draw robot
+				var angle = r.animateRotation * (Math.PI / 180);
+				var tX = r.x + (r.width / 2);
+				var tY = r.y + (r.height / 2);
+				me.ctx.translate(tX, tY);
+				me.ctx.rotate(angle);
+				me.ctx.translate(-tX, -tY);
+
+				//back
+				me.ctx.fillStyle = "black";
+				me.ctx.fillRect(r.x, r.y, r.width, r.height / 2);
+
+				//left arm
+				me.ctx.fillStyle = "black";
+				me.ctx.fillRect(r.x, r.y, r.width / 4, r.height);
+
+				//right arm
+				me.ctx.fillStyle = "black";
+				me.ctx.fillRect(r.x + (r.width - (r.width / 4)), r.y, r.width / 4, r.height);
+
+				//head arm
+				me.ctx.fillStyle = "red";
+				me.ctx.fillRect(r.x + (r.width / 4), r.y, r.width / 2, r.height / 2);
+
+
+				me.ctx.restore(); //restore
+			} //end robot loop
+			window.setTimeout(function() {
+				me.drawScreen();
+			}, intervalTime);
+		}
+	};
+	var jsUnit = {
+		testHarness: function(){
+			/*run before all tests*/
+			app.printOut("");
+		},
+		setDefault: function(e){
+			var btn = e.target;
+			btn.style.backgroundColor = 'transparent';
+			btn.style.color = 'black';
+		},
+		setPassed: function(e){
+			var btn = e.target;
+			btn.style.backgroundColor = 'green';
+			btn.style.color = 'white';
+		},
+		setFailed: function(e){
+			var btn = e.target;
+			btn.style.backgroundColor = 'red';
+			btn.style.color = 'black';
+		},
+		unitTest: {
+		
+		},
+		acceptanceTests: {
+			tc1_2 : {
+				title: "Test Case 1.2",			
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='MOVE';
+					app.executeButton.click();
+		
+					app.inputBox.value='LEFT';
+					app.executeButton.click();
+		
+					app.inputBox.value='RIGHT';
+					app.executeButton.click();
+		
+					app.inputBox.value='REPORT';
+					app.executeButton.click();
+		
+					if(app.lastReport == ""){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc2_1: {
+				title: "Test Case 2.1",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE 0,0,NORTH';
+					app.executeButton.click();
+		
+					app.inputBox.value='REPORT';
+					app.executeButton.click();
+		
+					if(app.lastReport == "0,0,NORTH"){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc3_1: {
+				title: "Test Case 3.1",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE 0,0,NORTH';
+					app.executeButton.click();
+		
+					app.inputBox.value='MOVE';
+					app.executeButton.click();
+		
+					app.inputBox.value='REPORT';
+					app.executeButton.click();
+		
+					if(app.lastReport == "0,1,NORTH"){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc3_2: {
+				title: "Test Case 3.2",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE 0,0,NORTH';
+					app.executeButton.click();
+		
+					for(var i=1,l=7;i<l;i++){
+						app.inputBox.value='MOVE';
+						app.executeButton.click();
+					}
+		
+					app.inputBox.value='REPORT';
+					app.executeButton.click();
+		
+					if(app.lastReport == "0,4,NORTH"){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc3_3: {
+				title: "Test Case 3.3",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE 1,2,EAST';
+					app.executeButton.click();
+	
+					app.inputBox.value='MOVE';
+					app.executeButton.click();
+									
+					app.inputBox.value='MOVE';
+					app.executeButton.click();
+				
+					app.inputBox.value='LEFT';
+					app.executeButton.click();
+				
+					app.inputBox.value='MOVE';
+					app.executeButton.click();
+		
+					app.inputBox.value='REPORT';
+					app.executeButton.click();
+					if(app.lastReport == "3,3,NORTH"){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc3_4: {
+				title: "Test Case 3.4",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE 0,0,NORTH';
+					app.executeButton.click();
+		
+					for(var i=1,l=7;i<l;i++){
+						app.inputBox.value='MOVE';
+						app.executeButton.click();
+					}
+					
+					app.inputBox.value='LEFT';
+					app.executeButton.click();
+					
+					app.inputBox.value='LEFT';
+					app.executeButton.click();
+					
+					app.inputBox.value='MOVE';
+					app.executeButton.click();
+		
+					app.inputBox.value='REPORT';
+					app.executeButton.click();
+		
+					if(app.lastReport == "0,3,SOUTH"){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc4_1: {
+				title: "Test Case 4.1",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE 0,0,NORTH';
+					app.executeButton.click();
+		
+					app.inputBox.value='LEFT';
+					app.executeButton.click();
+		
+					app.inputBox.value='REPORT';
+					app.executeButton.click();
+		
+					if(app.lastReport == "0,0,WEST"){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc5_1: {
+				title: "Test Case 5.1",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE 0,0,NORTH';
+					app.executeButton.click();
+		
+					app.inputBox.value='RIGHT';
+					app.executeButton.click();
+		
+					app.inputBox.value='REPORT';
+					app.executeButton.click();
+		
+					if(app.lastReport == "0,0,EAST"){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc6_1: {
+				title: "Test Case 6.1",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE 1,6,NORTH';
+					app.executeButton.click();
+		
+					if(app.robots.length == 0){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			},
+			tc7_1: {
+				title: "Test Case 7.1",
+				run: function(btn){
+					jsUnit.testHarness();
+					app.robots=[];
+					app.inputBox.value='PLACE';
+					app.executeButton.click();
+		
+					if(app.robots.length == 0){jsUnit.setPassed(btn);}
+					else{jsUnit.setFailed(btn);}
+				}
+			}
+		},
+		enumerateAcceptanceTests: function(){
+      var t = document.createElement("p");
+      t.className = "subtitle";
+      t.innerHTML = "Acceptance Tests";
+      document.getElementById("examples").appendChild(t);
+			for (var key in this.acceptanceTests) {
+  				if (this.acceptanceTests.hasOwnProperty(key)){
+					var t = this.acceptanceTests[key];
+					var p = document.createElement("p");
+					var b = document.createElement("input");
+					b.type = "button";
+					b.value = t.title;
+					b.onclick = t.run;
+					p.appendChild(b);
+					document.getElementById("examples").appendChild(p);
+				}
+			}
+		},
+		enumerateUnitTests: function(){
+      var t = document.createElement("p");
+      t.className = "subtitle";
+      t.innerHTML = "Unit Tests";
+      document.getElementById("examples").appendChild(t);
+			for (var key in this.unitTests) {
+  				if (this.unitTests.hasOwnProperty(key)){
+					var t = this.unitTests[key];
+					var p = document.createElement("p");
+					var b = document.createElement("input");
+					b.type = "button";
+					b.value = t.title;
+					b.onclick = t.run;
+					p.appendChild(b);
+					document.getElementById("examples").appendChild(p);
+				}
+			}
+		}
+	}
+  </script>
+  <style type="text/css">
+  	body {font-family: arial;}
+  	p {margin:2px;}
+  	.subtitle { font-weight:bold;}
+  	#section {width: 860px;}
+  	#holder {display: inline-block;width: 510px;}
+  	#examples,#tests {margin-left:10px;width: 300px;display: inline-block;position: absolute;}
+    .myCanvas {border: 1px solid black;}
+    .information {
+      text-align: center;
+      width: 500px;
+      height: 25px;
+   }
+  </style>
+  </head>
+  <body onload="app.init(500,500,5);jsUnit.enumerateAcceptanceTests();">
+  	<div id="section">
+  		<div id = "holder"></div>
+  		<div id = "examples">
+  			<p class="subtitle">Example Commands</p>
+  			<p><input type="button" value="PLACE 0,0,NORTH" onclick="app.inputBox.value='PLACE 0,0,NORTH';app.executeButton.click();" /></p>
+  			<p><input type="button" value="PLACE 4,4,SOUTH" onclick="app.inputBox.value='PLACE 4,4,SOUTH';app.executeButton.click();" /></p>
+  			<p><input type="button" value="PLACE 1,2,EAST" onclick="app.inputBox.value='PLACE 1,2,EAST';app.executeButton.click();" /></p>
+  			<p><input type="button" value="PLACE 2,4,WEST" onclick="app.inputBox.value='PLACE 2,4,WEST';app.executeButton.click();" /></p>
+  			<p><input type="button" value="MOVE" onclick="app.inputBox.value='MOVE';app.executeButton.click();" /></p>
+  			<p><input type="button" value="LEFT" onclick="app.inputBox.value='LEFT';app.executeButton.click();" /></p>
+  			<p><input type="button" value="RIGHT" onclick="app.inputBox.value='RIGHT';app.executeButton.click();" /></p>
+  			<p><input type="button" value="REPORT" onclick="app.inputBox.value='REPORT';app.executeButton.click();" /></p>
+  		</div>
+  	</div>
+  </body>
+</html>
